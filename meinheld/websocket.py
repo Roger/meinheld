@@ -36,8 +36,6 @@ class WebSocketMiddleware(object):
 
     def setup(self, environ):
         protocol_version = None
-        #import pprint
-        #pprint.pprint(environ)
         if environ.get('HTTP_SEC_WEBSOCKET_KEY', None) is None:
             return
 
@@ -110,7 +108,6 @@ class WebSocketMiddleware(object):
             raise ValueError("Unknown WebSocket protocol version.")
 
         sock.sendall(handshake_reply)
-        print handshake_reply
         environ['wsgi.websocket'] = ws
         return True
 
@@ -292,8 +289,26 @@ class WebSocket(object):
             count = (count + 1) % size
         return result.tostring()
 
-    def _parse_hybi(self, buf):
-        """ Parse a hybi(protocol 7) frame """
+    def _encode_hybi(self, opcode, buf):
+        """ Returns a hybi encoded frame """
+
+        if isinstance(buf, unicode):
+            buf = buf.encode('utf-8')
+        elif not isinstance(buf, str):
+            buf = str(buf)
+        blen = len(buf)
+
+        byte1 = 0x80 | (opcode & 0x0f) # FIN + opcode
+        if blen < 126:
+            header = struct.pack('>BB', byte1, blen)
+        elif blen > 125 and blen <= 65536:
+            header = struct.pack('>BBH', byte1, 126, blen)
+        elif blen >= 65536:
+            header = struct.pack('>BBQ', byte1, 127,  blen)
+        return header + buf, len(header)
+
+    def _decode_hybi(self, buf):
+        """ Decode hybi(protocol 7) frame """
         blen = len(buf)
         hlen = 2
         if blen < hlen:
@@ -312,7 +327,6 @@ class WebSocket(object):
         payload_length = byte2 & 0x7f
 
         # check extended payload
-        print 'payload_length', payload_length
         if payload_length == 127:
             hlen = 10
             if blen < hlen:
@@ -355,7 +369,7 @@ class WebSocket(object):
         while buf:
             if self.version == 7:
 
-                frame = self._parse_hybi(buf)
+                frame = self._decode_hybi(buf)
                 if not frame:
                     # an incomplete frame wait until buffer fill
                     print 'Incomplete Frame.. wait for data'
@@ -421,24 +435,27 @@ class WebSocket(object):
                     self.websocket_closed = True
                     break
                 else:
-                    print frame_type, repr(buf[0])
                     raise ValueError("Don't understand how to parse this type of message: %r" % buf)
         self._buf = buf
         return msgs
 
-    def send(self, message):
+    def send(self, message, opcode=common.OPCODE_TEXT):
         """Send a message to the browser.  *message* should be
         convertable to a string; unicode objects should be encodable
         as utf-8."""
-        packed = self._pack_message(message)
-        # if two greenthreads are trying to send at the same time
-        # on the same socket, sendlock prevents interleaving and corruption
+        if self.version == 7:
+            message, hlen = self._encode_hybi(opcode, message)
+            return self.socket.sendall(message)
+        else:
+            packed = self._pack_message(message)
+            # if two greenthreads are trying to send at the same time
+            # on the same socket, sendlock prevents interleaving and corruption
 
-        #self._sendlock.acquire()
-        #try:
-        return self.socket.sendall(packed)
-        #finally:
-        #    self._sendlock.release()
+            #self._sendlock.acquire()
+            #try:
+            return self.socket.sendall(packed)
+            #finally:
+            #    self._sendlock.release()
 
     def wait(self):
         """Waits for and deserializes messages. Returns a single
