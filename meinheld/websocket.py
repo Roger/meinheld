@@ -36,7 +36,9 @@ class WebSocketMiddleware(object):
 
     def setup(self, environ):
         protocol_version = None
-        if environ.get('HTTP_SEC_WEBSOCKET_KEY', None) is None:
+
+        if not ('upgrade' in environ.get('HTTP_CONNECTION', '').lower()  and
+                environ.get('HTTP_UPGRADE', '').lower() == 'websocket'):
             return
 
         # See if they sent the new-format headers
@@ -308,7 +310,7 @@ class WebSocket(object):
         return header + buf, len(header)
 
     def _decode_hybi(self, buf):
-        """ Decode hybi(protocol 7) frame """
+        """ Decode hybi frame """
         blen = len(buf)
         hlen = 2
         if blen < hlen:
